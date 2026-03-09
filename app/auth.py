@@ -1,8 +1,22 @@
-from flask import Blueprint, redirect, url_for, render_template, request, current_app
+from decimal import Decimal
+from io import BytesIO
+
+from flask import (
+    Blueprint,
+    abort,
+    current_app,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    url_for,
+)
 from flask_login import login_required, login_user, logout_user
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from .models import User
-from .extensions import login_manager, db
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+
+from .extensions import db, login_manager
+from .models import User, Venta
+
 auth_bp = Blueprint("auth", __name__)
 
 
@@ -19,37 +33,35 @@ def _read_reset_token(token, max_age=3600):
     serializer = _get_reset_serializer()
     return serializer.loads(token, salt="password-reset", max_age=max_age)
 
+def _fmt_money(value):
+    return f"{Decimal(value or 0):.2f}"
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(user_id)
 
-@auth_bp.route('/')
+
+@auth_bp.route("/")
 def inicio():
-    return redirect(url_for('auth.login'))
+    return redirect(url_for("auth.login"))
 
-@auth_bp.route('/login', methods = ['GET','POST']) 
+
+@auth_bp.route("/login", methods=["GET", "POST"])
 def login():
-    login_error = None
-
     if request.method == "POST":
-        nombreusuario = request.form.get("nombreusuario", "").strip()
-        contrasenia = request.form.get("contrasenia", "")
-        usuario = User.query.filter_by(
-            nombre=nombreusuario
-        ).first()
-        
-        if usuario and usuario.check_password(contrasenia):
+        usuario = User.query.filter_by(nombre=request.form.get("nombreusuario")).first()
+
+        if usuario and usuario.check_password(request.form.get("contrasenia")):
             login_user(usuario)
             return redirect("/admin")
-        login_error = "Usuario o contraseña incorrectos."
-    
-    return render_template("login.html", login_error=login_error)
+
+    return render_template("login.html")
 
 
-@auth_bp.route('/registro', methods=['POST'])
+@auth_bp.route("/registro", methods=["POST"])
 def registro():
     nombre = request.form.get("nuevo_nombre", "").strip()
-    email = request.form.get("nuevo_email", "").strip().lower()
+    email = request.form.get("nuevo_email", "").strip()
     password = request.form.get("nuevo_password", "")
     password_confirm = request.form.get("nuevo_password_confirm", "")
 
@@ -57,27 +69,23 @@ def registro():
         return render_template("login.html", registro_error="Todos los campos son obligatorios.")
 
     if password != password_confirm:
-        return render_template("login.html", registro_error="Las contraseñas no coinciden.")
+        return render_template("login.html", registro_error="Las contrasenas no coinciden.")
 
     if User.query.filter_by(nombre=nombre).first():
         return render_template("login.html", registro_error="El nombre de usuario ya existe.")
 
     if User.query.filter_by(email=email).first():
-        return render_template("login.html", registro_error="El correo ya está registrado.")
+        return render_template("login.html", registro_error="El correo ya esta registrado.")
 
-    nuevo_usuario = User(
-        nombre=nombre,
-        email=email,
-        rol="user"
-    )
-    nuevo_usuario.set_password(password)
-    db.session.add(nuevo_usuario)
+    usuario = User(nombre=nombre, email=email, rol="usuario")
+    usuario.set_password(password)
+    db.session.add(usuario)
     db.session.commit()
 
-    return render_template("login.html", registro_ok="Registro exitoso. Ya puedes iniciar sesión.")
+    return render_template("login.html", registro_ok="Cuenta creada correctamente. Ya puedes iniciar sesion.")
 
 
-@auth_bp.route('/recuperar', methods=['GET', 'POST'])
+@auth_bp.route("/recuperar", methods=["GET", "POST"])
 def recuperar_password():
     reset_link = None
     mensaje = None
@@ -89,23 +97,23 @@ def recuperar_password():
         if usuario:
             token = _generate_reset_token(usuario.email)
             reset_link = url_for("auth.restablecer_password", token=token, _external=True)
-            mensaje = "Se generó un enlace de recuperación."
+            mensaje = "Se genero un enlace de recuperacion."
         else:
             mensaje = "No existe un usuario con ese correo."
 
     return render_template("forgot_password.html", reset_link=reset_link, mensaje=mensaje)
 
 
-@auth_bp.route('/restablecer/<token>', methods=['GET', 'POST'])
+@auth_bp.route("/restablecer/<token>", methods=["GET", "POST"])
 def restablecer_password(token):
     error = None
 
     try:
         email = _read_reset_token(token)
     except SignatureExpired:
-        return render_template("reset_password.html", token_valido=False, error="El enlace expiró.")
+        return render_template("reset_password.html", token_valido=False, error="El enlace expiro.")
     except BadSignature:
-        return render_template("reset_password.html", token_valido=False, error="El enlace no es válido.")
+        return render_template("reset_password.html", token_valido=False, error="El enlace no es valido.")
 
     usuario = User.query.filter_by(email=email).first()
     if not usuario:
@@ -116,9 +124,9 @@ def restablecer_password(token):
         password_confirm = request.form.get("password_confirm", "")
 
         if not password:
-            error = "La contraseña es obligatoria."
+            error = "La contrasena es obligatoria."
         elif password != password_confirm:
-            error = "Las contraseñas no coinciden."
+            error = "Las contrasenas no coinciden."
         else:
             usuario.set_password(password)
             db.session.commit()
@@ -127,8 +135,25 @@ def restablecer_password(token):
     return render_template("reset_password.html", token_valido=True, error=error)
 
 
-@auth_bp.route('/logout')
+@auth_bp.route("/logout")
 @login_required
 def logout():
     logout_user()
     return redirect(url_for("auth.login"))
+
+
+@auth_bp.route("/ventas/<int:venta_id>/pdf")
+@login_required
+def venta_pdf(venta_id):
+    venta = Venta.query.get_or_404(venta_id)
+    try:
+        pdf_buffer = _build_venta_pdf(venta)
+    except ImportError:
+        abort(500, description="Falta instalar reportlab para generar PDF.")
+
+    return send_file(
+        pdf_buffer,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"comprobante_venta_{venta.id}.pdf",
+    )
