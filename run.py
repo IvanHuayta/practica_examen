@@ -1,4 +1,4 @@
-from app import create_app
+﻿from app import create_app
 from app.extensions import db
 from app.models import User
 from sqlalchemy import inspect, text
@@ -40,14 +40,40 @@ def sync_user_table_schema():
                 conn.execute(text(statement))
 
 
+def sync_venta_table_schema():
+    inspector = inspect(db.engine)
+
+    if not inspector.has_table("venta"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("venta")}
+    statements = []
+
+    if "estado" not in columns:
+        statements.append(
+            "ALTER TABLE `venta` ADD COLUMN estado VARCHAR(20) NOT NULL DEFAULT 'borrador'"
+        )
+    if "fecha_confirmacion" not in columns:
+        statements.append(
+            "ALTER TABLE `venta` ADD COLUMN fecha_confirmacion DATETIME NULL"
+        )
+
+    if statements:
+        with db.engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+
+
 if __name__ == "__main__":
     with app.app_context():
-        # Ensure tables exist before running any auth queries.
         db.create_all()
         sync_user_table_schema()
+        sync_venta_table_schema()
+
         if not User.query.filter_by(nombre="admin").first():
             usuario = User(nombre="admin", email="admin@local", rol="admin")
-            usuario.set_password('1234')
+            usuario.set_password("1234")
             db.session.add(usuario)
             db.session.commit()
+
     app.run(debug=True, port=5001)
