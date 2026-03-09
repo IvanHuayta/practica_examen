@@ -1,4 +1,5 @@
 from decimal import Decimal
+﻿from decimal import Decimal
 from io import BytesIO
 
 from flask import (
@@ -36,6 +37,80 @@ def _read_reset_token(token, max_age=3600):
 def _fmt_money(value):
     return f"{Decimal(value or 0):.2f}"
 
+
+def _fmt_money(value):
+    return f"{Decimal(value or 0):.2f}"
+
+
+def _build_venta_pdf(venta):
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+
+    y = height - 50
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.drawString(50, y, "Comprobante de Venta")
+
+    y -= 30
+    pdf.setFont("Helvetica", 11)
+    pdf.drawString(50, y, f"Venta ID: {venta.id}")
+    y -= 18
+    pdf.drawString(50, y, f"Fecha: {venta.fecha.strftime('%Y-%m-%d %H:%M:%S')}")
+    y -= 18
+    pdf.drawString(50, y, f"Cliente: {venta.cliente_nombre}")
+    y -= 18
+    pdf.drawString(50, y, f"Vendedor: {venta.usuario.nombre if venta.usuario else '-'}")
+
+    y -= 28
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawString(50, y, "Producto")
+    pdf.drawString(300, y, "Cant.")
+    pdf.drawString(360, y, "P. Unit.")
+    pdf.drawString(460, y, "Subtotal")
+
+    y -= 14
+    pdf.line(50, y, 550, y)
+    y -= 16
+
+    pdf.setFont("Helvetica", 10)
+    detalles = sorted(venta.detalles, key=lambda d: d.id or 0)
+    for detalle in detalles:
+        if y < 80:
+            pdf.showPage()
+            y = height - 50
+            pdf.setFont("Helvetica-Bold", 10)
+            pdf.drawString(50, y, "Producto")
+            pdf.drawString(300, y, "Cant.")
+            pdf.drawString(360, y, "P. Unit.")
+            pdf.drawString(460, y, "Subtotal")
+            y -= 14
+            pdf.line(50, y, 550, y)
+            y -= 16
+            pdf.setFont("Helvetica", 10)
+
+        nombre_producto = detalle.producto.nombre if detalle.producto else "Producto"
+        pdf.drawString(50, y, nombre_producto[:45])
+        pdf.drawRightString(340, y, str(detalle.cantidad))
+        pdf.drawRightString(430, y, _fmt_money(detalle.precio_unitario))
+        pdf.drawRightString(540, y, _fmt_money(detalle.subtotal))
+        y -= 16
+
+    y -= 6
+    pdf.line(360, y, 550, y)
+    y -= 18
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawRightString(500, y, "TOTAL:")
+    pdf.drawRightString(540, y, _fmt_money(venta.total))
+
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+    return buffer
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(user_id)
@@ -48,10 +123,25 @@ def inicio():
 
 @auth_bp.route("/login", methods=["GET", "POST"])
 def login():
+    login_error = None
+
+@auth_bp.route("/login", methods=["GET", "POST"])
+def login():
     if request.method == "POST":
         usuario = User.query.filter_by(nombre=request.form.get("nombreusuario")).first()
 
         if usuario and usuario.check_password(request.form.get("contrasenia")):
+            login_user(usuario)
+            return redirect("/admin")
+
+    return render_template("login.html")
+        nombreusuario = request.form.get("nombreusuario", "").strip()
+        contrasenia = request.form.get("contrasenia", "")
+        usuario = User.query.filter_by(
+            nombre=nombreusuario
+        ).first()
+        
+        if usuario and usuario.check_password(contrasenia):
             login_user(usuario)
             return redirect("/admin")
 
